@@ -13,6 +13,13 @@ The resulting statement is categorically different from what annealing gives:
 > **"This packing is the proven global minimum of the stated energy function"**
 > — not "this is the best my sampler found."
 
+**Read this before the tables below.** The claim is about the *artifact*, not
+about speed or scale. Benchmarked head-to-head, `toulbar2` solves every instance
+here in under a second and solves twelve that this pipeline cannot certify at
+all. If you want an optimal packing, use `toulbar2`. What this repository offers
+is a certificate you can re-check without trusting the solver — see
+[Measured against `toulbar2`](#measured-against-toulbar2).
+
 ## The result
 
 The naive reduction fails at useful sizes. Goldstein **Dead-End Elimination**
@@ -234,6 +241,60 @@ the two instances it was built for it moved 1UBQ from 93 to 87 variables and
 3CHY from 98 to 96 without either crossing the line. What has to shrink is
 width.
 
+## Measured against `toulbar2`
+
+The README has always conceded that exact solvers do this already. That
+concession was never measured, which made it the load-bearing unknown in the
+repository. `experiments/toulbar2_benchmark.py` measures it: the same MRF goes
+to `toulbar2` — a weighted-CSP solver that takes the pairwise problem directly,
+with no binary encoding — and to this pipeline. 42 instances, 32–369 flexible
+residues, all three χ depths.
+
+**The result is not close.**
+
+| | toulbar2 | this pipeline |
+|---|---|---|
+| instances solved to optimality | **42 / 42** | 30 / 42 |
+| slowest instance | **0.91 s** | 361 s |
+| median time on instances we certify | 0.04 s | 0.9 s (**11× slower**) |
+| worst case on instances we certify | — | **154× slower** |
+
+`toulbar2` solved every instance in under a second, including all twelve this
+pipeline cannot certify. On those twelve, our best answer was worse than the
+true optimum by between 2.4 and **867.8** kcal/mol:
+
+| instance | our shortfall | toulbar2 | ours |
+|---|---|---|---|
+| 1GAI χ≤3 | **+867.79** | 0.62 s | 361 s |
+| 1A6M χ≤3 | +669.68 | 0.25 s | 174 s |
+| 1QOP χ≤3 | +364.01 | 0.39 s | 107 s |
+| 1UBQ χ≤3 | +57.21 | 0.09 s | 34 s |
+| 1A6M χ≤2 | +2.42 | 0.09 s | 34 s |
+
+### What the benchmark does confirm
+
+**Every one of the 30 certified optima matches `toulbar2` exactly.** That is the
+first independent check that these certificates are correct rather than merely
+self-consistent — an encoding bug or an unsound DEE step would show up here as a
+disagreement, and none did. It also confirms the pipeline never claimed
+optimality it did not have: on all twelve failures it returned `bracket`, not a
+false certificate. An annealer would have reported the 1GAI χ≤3 answer with no
+indication it was 868 off.
+
+### What it does not
+
+It does not support any claim of speed or scale. On time-to-optimal `toulbar2`
+dominates: faster on every non-trivial instance, and it solves a strictly larger
+set. **If you want an optimal packing, use `toulbar2`, not this.**
+
+What remains is narrower and worth stating precisely: this pipeline emits a
+**certificate a third party can re-check by bounded arithmetic without rerunning
+the solver**. `toulbar2` proves optimality internally — you trust the solver, or
+you rerun it. That difference is the contribution, and it is an artifact
+difference, not a performance one. A benchmark table cannot express it, which is
+why the table above should be read as bounding the claim rather than supporting
+it.
+
 ## Correctness
 
 Every claim above rests on checks that run in CI, because encoding bugs are the
@@ -249,12 +310,18 @@ failure mode in this area:
   instance, asserting equality. This is what makes "a certificate on the pruned
   problem is a certificate on the original" a verified statement rather than an
   asserted one.
+- **Agreement with an independent exact solver**: all 30 certified optima equal
+  `toulbar2`'s, to floating-point equality, on the same 42-instance set. The
+  checks above are internal; this one is not, and it is the strongest evidence
+  that the certificates are actually right.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 bash scripts/fetch_data.sh
 .venv/bin/python tests/test_packing.py
 NROT=4 .venv/bin/python experiments/encoding_comparison.py
+.venv/bin/python experiments/size_scaling.py         # the size / treewidth ladder
+.venv/bin/python experiments/toulbar2_benchmark.py   # needs pytoulbar2
 ```
 
 ## Honest scope
@@ -262,7 +329,10 @@ NROT=4 .venv/bin/python experiments/encoding_comparison.py
 **Provably-optimal side-chain packing is not new.** DEE/A\*, ILP formulations,
 and weighted-CSP solvers such as `toulbar2` have solved these instances exactly
 for years, and on much larger proteins than these. Nothing here beats them on
-speed or size.
+speed or size — and that is now **measured, not assumed**: `toulbar2` solves all
+42 benchmark instances in under a second each, while this pipeline certifies 30
+of them and is a median 11× slower where it succeeds. See
+[Measured against `toulbar2`](#measured-against-toulbar2).
 
 What is different is the **artifact**: an independently verifiable certificate.
 A third party — a reviewer, a collaborator, a contract counterparty — can check
@@ -315,9 +385,12 @@ failure to the model.
    grid, which would also let low-probability rotamers be pruned on prior.
 7. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
    gets genuinely frustrated and persistency arguments are most likely to weaken.
-8. **Benchmark against `toulbar2`** for time-to-optimal, to place this honestly
-   against the established exact solvers. Now more pointed than before: at χ≤3
-   `toulbar2` would likely solve the instances this pipeline cannot certify.
+8. ~~Benchmark against `toulbar2`~~ — **done, and it is a loss.** `toulbar2`
+   solves 42/42 in under a second each; we certify 30/42 and are a median 11×
+   slower where we succeed. The prediction that it would solve what we cannot
+   was correct. The benchmark did, however, confirm all 30 certified optima
+   independently. See
+   [Measured against `toulbar2`](#measured-against-toulbar2).
 
 ## Licence
 

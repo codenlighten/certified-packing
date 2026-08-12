@@ -1,3 +1,5 @@
 numpy>=1.26
 scipy>=1.11
 crown @ git+https://github.com/codenlighten/crown.git
+# Only for experiments/toulbar2_benchmark.py; nothing else imports it.
+pytoulbar2>=1.3
