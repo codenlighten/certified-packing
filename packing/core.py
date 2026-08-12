@@ -8,6 +8,7 @@ over a choice of one rotamer r_i per flexible residue.
 import numpy as np
 from collections import defaultdict
 from .forcefield import ENERGIES, steric_count
+from .rotamers import build_side_chain_rotamers
 
 CONTACT_CUT = 6.0
 CLASH = 3.2
@@ -58,12 +59,28 @@ def _dihedral(p0, p1, p2, p3):
     return np.degrees(np.arctan2(np.dot(np.cross(b1, v), w), np.dot(v, w)))
 
 
-def build_rotamers(residues, nrot):
-    """(flex, backbone_atoms). Rotamer 0 is always the native conformation."""
+def build_rotamers(residues, nrot=4, max_chi=None, max_rotamers=200):
+    """(flex, backbone). Rotamer 0 is always the native conformation.
+
+    max_chi=None keeps the legacy single-chi behaviour (nrot wells about CA-CB).
+    max_chi=k uses the multi-chi generator in packing.rotamers.
+    """
     flex, fixed, fixed_el = [], [], []
     for rn, rid, atoms in residues:
+        built = None
+        if max_chi is not None:
+            built = build_side_chain_rotamers(rn, atoms, max_chi, max_rotamers)
+        if built is not None:
+            confs, names, elems = built
+            flex.append({"name": rn, "id": rid.strip(), "confs": confs,
+                         "elems": elems, "stem": atoms["CB"][0]})
+            keepbb = [a for a in atoms if greek_rank_lt2(a)]
+            fixed.append(np.array([atoms[a][0] for a in keepbb]))
+            fixed_el.extend(atoms[a][1] for a in keepbb)
+            continue
         moving = [a for a in atoms if a not in BACKBONE and a != "CB"]
-        if rn in NO_CHI1 or "CB" not in atoms or "N" not in atoms or not moving:
+        if (max_chi is not None or rn in NO_CHI1 or "CB" not in atoms
+                or "N" not in atoms or not moving):
             fixed.append(np.array([atoms[a][0] for a in atoms]))
             fixed_el.extend(atoms[a][1] for a in atoms)
             continue
@@ -78,6 +95,11 @@ def build_rotamers(residues, nrot):
         fixed.append(np.array([atoms[a][0] for a in keepbb]))
         fixed_el.extend(atoms[a][1] for a in keepbb)
     return flex, (np.vstack(fixed), fixed_el)
+
+
+def greek_rank_lt2(atom_name):
+    from .rotamers import greek_rank
+    return greek_rank(atom_name) < 2
 
 
 # -------------------------------------------------------------------- energy

@@ -95,6 +95,36 @@ torsional strain, no rotamer priors, and burial-count solvation rather than
 EEF1/GB. It exists to test that the pipeline survives a continuous, physically
 motivated energy with realistic dynamic range — not to predict structures.
 
+## Rotamer arity — does it scale?
+
+Published libraries carry 10–100 rotamers per residue. `packing/rotamers.py`
+generates rotamers over multi-χ staggered wells (**not** the Dunbrack library,
+which requires registration — see that module's docstring), driving mean arity
+from ~4 to ~24. Under the `mm` energy:
+
+| protein | χ≤1 mean k / pruned | χ≤2 mean k / pruned | χ≤3 mean k / pruned | certified |
+|---|---|---|---|---|
+| 2I9M (9 res) | 3.7 / 64% | 10.3 / 82% | 23.3 / **90%** | ✔ ✔ ✔ |
+| 1L2Y (13) | 3.3 / 60% | 8.6 / 71% | 14.2 / **83%** | ✔ ✔ ✔ |
+| 1E0Q (16) | 4.0 / 69% | 8.7 / 81% | 14.3 / **85%** | ✔ ✔ ✔ |
+| 1FME (25) | 4.0 / 69% | 11.1 / 79% | 24.4 / **85%** | ✔ ✔ ✘ |
+| 1VII (30) | 3.8 / 70% | 10.7 / 86% | 18.5 / **81%** | ✔ ✔ ✘ |
+
+**DEE gets stronger as arity grows, not weaker** — pruning rises from 60–70% at
+χ≤1 to 81–90% at χ≤3. This is the opposite of the expected failure mode, and it
+makes sense: more rotamers give each residue more chances to find a dominating
+alternative, so Goldstein's criterion fires more often.
+
+**The wall is elsewhere.** 13/15 certify. The two failures are 1FME and 1VII at
+χ≤3, where DEE pruned 85% and 81% but still left **92 and 105 variables** — above
+the ~90-variable ceiling already identified for encodings that retain one-hot
+components. The binding constraint is the *absolute* size of the residual core,
+driven by protein size, not by DEE's pruning rate.
+
+*A prediction of ours that was wrong:* 1E0Q was flagged as the canary after
+pruning only 47% at 4 rotamers. It scaled fine (69% → 81% → 85%). Pruning rate
+on a small instance did not predict the limit; total residual size did.
+
 ## Correctness
 
 Every claim above rests on checks that run in CI, because encoding bugs are the
@@ -152,14 +182,17 @@ failure to the model.
 
 1. ~~Real energy function~~ — **done.** DEE prunes 47–75% under molecular
    mechanics and certification is unchanged.
-2. **Real rotamer libraries** — Dunbrack backbone-dependent, χ₁+χ₂, 10–100
-   rotamers per residue. This is the real scaling test, and 1E0Q's 47% pruning
-   rate is the warning sign to watch.
-3. **Electrostatics and proper solvation** (EEF1 or GB), which is where the
-   energy landscape gets genuinely frustrated.
-4. **Larger proteins**, and a benchmark against `toulbar2` for time-to-optimal.
-5. **Split DEE** and stronger elimination criteria for when Goldstein stalls —
-   directly relevant to 1E0Q.
+2. ~~Real rotamer libraries~~ — **done, with a caveat.** Multi-χ generation
+   reaches mean arity ~24; DEE pruning *improves* to 81–90%. But 2/15 instances
+   now exceed the certification ceiling at ~90–105 residual variables.
+3. **Shrink the residual core** — this is now the bottleneck, not DEE. Split DEE
+   and unification criteria for when Goldstein stalls, plus a better encoding for
+   the residues that still need one-hot after pruning.
+4. **A real library** (Dunbrack, with rotamer priors) to replace the staggered
+   grid, which would also let low-probability rotamers be pruned on prior.
+5. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
+   gets genuinely frustrated and persistency arguments are most likely to weaken.
+6. **Larger proteins**, and a benchmark against `toulbar2` for time-to-optimal.
 
 ## Licence
 
