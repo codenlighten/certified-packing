@@ -19,7 +19,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from packing.core import (parse_residues, build_rotamers, build_instance,
-                          goldstein_dee, encode, evaluate)
+                          dee_prune, encode, evaluate)
 from crown import QUBO, crown_solve, build_certificate, verify
 
 PROTEINS = os.environ.get("PROTEINS", "2I9M,1L2Y,1E0Q,1FME,1VII").split(",")
@@ -30,8 +30,10 @@ VAR_CAP = int(os.environ.get("VAR_CAP", 400))
 print("=" * 92)
 print(f"ROTAMER SCALING — energy={ENERGY}, chi depths {CHIS}")
 print("=" * 92)
-print(f"{'protein':<8}{'chi':<5}{'flex':<6}{'rotamers':<10}{'mean k':<8}"
-      f"{'DEE kept':<10}{'pruned':<9}{'vars':<7}{'certified':<11}{'sec':<7}")
+SPLIT = os.environ.get("SPLIT", "1") == "1"
+print(f"Split DEE: {'ON' if SPLIT else 'OFF (Goldstein only)'}\n")
+print(f"{'protein':<8}{'chi':<5}{'rot':<7}{'mean k':<8}"
+      f"{'gold':<7}{'split':<7}{'pruned':<9}{'vars':<7}{'certified':<24}{'sec':<7}")
 
 for pid in PROTEINS:
     residues = parse_residues(f"data/pdb/{pid}.pdb")
@@ -42,7 +44,9 @@ for pid in PROTEINS:
         tot = sum(len(e) for e in Eself)
         mean_k = tot / len(Eself)
 
-        Es, Ep, keep = goldstein_dee(Eself, Epair)
+        _, _, kg = dee_prune(Eself, Epair, split=False)
+        n_gold = sum(len(k) for k in kg)
+        Es, Ep, keep = dee_prune(Eself, Epair, split=SPLIT)
         kept = sum(len(k) for k in keep)
         pruned = 100 * (tot - kept) / tot
 
@@ -64,7 +68,7 @@ for pid in PROTEINS:
                                   Eself, Epair)
                 assert abs(lifted - e_pruned) < 1e-6, f"LIFT MISMATCH {pid} chi{mc}"
 
-        print(f"{pid:<8}{mc:<5}{len(flex):<6}{tot:<10}{mean_k:<8.1f}"
-              f"{kept:<10}{pruned:>5.0f}%   {nv:<7}"
-              f"{('YES' if cert else 'no ') + ' ' + str(kind):<22}"
+        print(f"{pid:<8}{mc:<5}{tot:<7}{mean_k:<8.1f}"
+              f"{n_gold:<7}{kept:<7}{pruned:>5.0f}%   {nv:<7}"
+              f"{('YES ' if cert else 'no  ') + str(kind):<24}"
               f"{time.time()-t0:>6.1f}")

@@ -201,6 +201,77 @@ def goldstein_dee(Eself, Epair, max_rounds=50):
     return Es, Ep, keep
 
 
+def dee_prune(Eself, Epair, split=True, max_rounds=60):
+    """Goldstein DEE, optionally strengthened with Split DEE (1 witness).
+
+    Goldstein: rotamer r at residue i is dead if some single t dominates r
+    against EVERY environment.
+
+    Split (Pierce, Spriet, Desmet & Mayo 2000): partition the environment by the
+    rotamer chosen at a witness residue w. If, for EVERY rotamer of w, SOME t
+    dominates r within that partition -- and t may differ per partition -- then r
+    is still dead. Strictly stronger, because Goldstein needs one t to work
+    everywhere at once.
+
+    Both criteria are provably safe: neither can remove a globally optimal
+    rotamer. Verified against brute force in tests/test_packing.py.
+    """
+    n = len(Eself)
+    alive = [list(range(len(e))) for e in Eself]
+    nb = defaultdict(dict)
+    for (i, j), M in Epair.items():
+        nb[i][j] = M
+        nb[j][i] = M.T
+
+    for _ in range(max_rounds):
+        removed = 0
+        for i in range(n):
+            ai = alive[i]
+            if len(ai) <= 1:
+                continue
+            es = Eself[i][ai]
+            k = len(ai)
+            subs, ms = {}, {}
+            for j, D in nb[i].items():
+                if not alive[j]:
+                    continue
+                sub = D[np.ix_(ai, alive[j])]                 # (k, kj)
+                subs[j] = sub
+                ms[j] = (sub[:, None, :] - sub[None, :, :]).min(axis=2)
+
+            base = es[:, None] - es[None, :]
+            for m in ms.values():
+                base = base + m
+            np.fill_diagonal(base, -np.inf)                   # t == r excluded
+
+            dead = base.max(axis=1) > 1e-9                    # Goldstein
+
+            if split:
+                for w, sub_w in subs.items():
+                    if len(alive[w]) <= 1 or dead.all():
+                        continue
+                    # remove w's worst-case term, add the specific witness term
+                    B = (base - ms[w])[:, :, None] \
+                        + (sub_w[:, None, :] - sub_w[None, :, :])
+                    B[np.arange(k), np.arange(k), :] = -np.inf
+                    covered = (B > 1e-9).any(axis=1).all(axis=1)
+                    dead |= covered
+
+            if dead.all():                     # degenerate ties: keep one
+                dead[int(np.argmax(dead))] = False
+            if dead.any():
+                alive[i] = [r for r, d in zip(ai, dead) if not d]
+                removed += int(dead.sum())
+        if removed == 0:
+            break
+
+    keep = alive
+    Es = [Eself[i][keep[i]] for i in range(n)]
+    Ep = {(i, j): M[np.ix_(keep[i], keep[j])] for (i, j), M in Epair.items()}
+    Ep = {kk: v for kk, v in Ep.items() if np.abs(v).max() > 1e-9}
+    return Es, Ep, keep
+
+
 # ------------------------------------------------------------------ encodings
 def encode(Eself, Epair, mode="onehot"):
     """Build a QUBO. Returns (Q, const, decoder, lam, nvars).

@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from packing.core import (encode, qubo_value, evaluate, brute_force,
-                          goldstein_dee)
+                          goldstein_dee, dee_prune)
 
 rng = np.random.default_rng(7)
 fails = []
@@ -71,6 +71,21 @@ for trial in range(8):
     pruned = sum(arities) - sum(len(k) for k in keep)
     check(f"trial {trial} arities={arities} pruned={pruned} "
           f"opt {before:.4f} -> {after:.4f}", abs(before - after) < 1e-8)
+
+print("\nSPLIT DEE SAFETY: stronger pruning still preserves the optimum")
+for trial in range(10):
+    n = int(rng.integers(3, 6))
+    arities = [int(rng.integers(2, 5)) for _ in range(n)]
+    Eself, Epair = random_instance(n, arities)
+    before, _ = brute_force(Eself, Epair)
+    Eg, Pg, kg = dee_prune(Eself, Epair, split=False)
+    Es, Ep, keep = dee_prune(Eself, Epair, split=True)
+    after, _ = brute_force(Es, Ep)
+    ng = sum(len(x) for x in kg)
+    ns = sum(len(x) for x in keep)
+    check(f"trial {trial} arities={arities} goldstein->{ng} split->{ns} "
+          f"opt {before:.4f} -> {after:.4f}",
+          abs(before - after) < 1e-8 and ns <= ng)
 
 print("\nDEE + ENCODING: pruned instance still round-trips")
 for trial in range(4):

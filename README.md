@@ -104,26 +104,43 @@ from ~4 to ~24. Under the `mm` energy:
 
 | protein | χ≤1 mean k / pruned | χ≤2 mean k / pruned | χ≤3 mean k / pruned | certified |
 |---|---|---|---|---|
-| 2I9M (9 res) | 3.7 / 64% | 10.3 / 82% | 23.3 / **90%** | ✔ ✔ ✔ |
-| 1L2Y (13) | 3.3 / 60% | 8.6 / 71% | 14.2 / **83%** | ✔ ✔ ✔ |
-| 1E0Q (16) | 4.0 / 69% | 8.7 / 81% | 14.3 / **85%** | ✔ ✔ ✔ |
-| 1FME (25) | 4.0 / 69% | 11.1 / 79% | 24.4 / **85%** | ✔ ✔ ✘ |
-| 1VII (30) | 3.8 / 70% | 10.7 / 86% | 18.5 / **81%** | ✔ ✔ ✘ |
+| 2I9M (9 res) | 3.7 / 67% | 10.3 / 85% | 23.3 / **91%** | ✔ ✔ ✔ |
+| 1L2Y (13) | 3.3 / 60% | 8.6 / 74% | 14.2 / **84%** | ✔ ✔ ✔ |
+| 1E0Q (16) | 4.0 / 69% | 8.7 / 86% | 14.3 / **90%** | ✔ ✔ ✔ |
+| 1FME (25) | 4.0 / 70% | 11.1 / 83% | 24.4 / **89%** | ✔ ✔ ✔ |
+| 1VII (30) | 3.8 / 70% | 10.7 / 88% | 18.5 / **90%** | ✔ ✔ ✔ |
+
+(Split DEE enabled; pruning percentages are post-split.)
 
 **DEE gets stronger as arity grows, not weaker** — pruning rises from 60–70% at
 χ≤1 to 81–90% at χ≤3. This is the opposite of the expected failure mode, and it
 makes sense: more rotamers give each residue more chances to find a dominating
 alternative, so Goldstein's criterion fires more often.
 
-**The wall is elsewhere.** 13/15 certify. The two failures are 1FME and 1VII at
-χ≤3, where DEE pruned 85% and 81% but still left **92 and 105 variables** — above
-the ~90-variable ceiling already identified for encodings that retain one-hot
-components. The binding constraint is the *absolute* size of the residual core,
-driven by protein size, not by DEE's pruning rate.
+With Goldstein alone, 13/15 certified: 1FME and 1VII at χ≤3 pruned 85% and 81%
+but still left **92 and 105 residual variables**, above the ~90-variable
+certification ceiling.
 
 *A prediction of ours that was wrong:* 1E0Q was flagged as the canary after
 pruning only 47% at 4 rotamers. It scaled fine (69% → 81% → 85%). Pruning rate
 on a small instance did not predict the limit; total residual size did.
+
+### Split DEE closes the gap: 15/15
+
+Split DEE (Pierce, Spriet, Desmet & Mayo 2000) partitions the environment by a
+witness residue and allows a **different** dominating rotamer per partition —
+strictly stronger than Goldstein, which needs one rotamer to dominate everywhere
+at once. On the two failures:
+
+| instance | Goldstein survivors | Split survivors | vars | result | time |
+|---|---|---|---|---|---|
+| 1FME χ≤3 | 92 | **66** (89% pruned) | 80 → **53** | bracket → **certified** | 61s → **10s** |
+| 1VII χ≤3 | 105 | **56** (90% pruned) | 87 → **31** | bracket → **certified** | 130s → **7s** |
+
+**All 15 instances now certify**, and the hard cases got *faster*: a smaller
+residual core means the solver finishes quickly rather than grinding to a
+bracket. Split DEE is verified optimum-preserving against brute force in
+`tests/test_packing.py`.
 
 ## Correctness
 
@@ -185,14 +202,16 @@ failure to the model.
 2. ~~Real rotamer libraries~~ — **done, with a caveat.** Multi-χ generation
    reaches mean arity ~24; DEE pruning *improves* to 81–90%. But 2/15 instances
    now exceed the certification ceiling at ~90–105 residual variables.
-3. **Shrink the residual core** — this is now the bottleneck, not DEE. Split DEE
-   and unification criteria for when Goldstein stalls, plus a better encoding for
-   the residues that still need one-hot after pruning.
-4. **A real library** (Dunbrack, with rotamer priors) to replace the staggered
+3. ~~Shrink the residual core~~ — **done.** Split DEE takes 13/15 → **15/15**,
+   cutting survivors by 28–47% on the hard cases and running faster.
+4. **Larger proteins** — every instance here now certifies in ≤10s, so the size
+   ceiling is untested. This is the next real boundary.
+5. **A real library** (Dunbrack, with rotamer priors) to replace the staggered
    grid, which would also let low-probability rotamers be pruned on prior.
-5. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
+6. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
    gets genuinely frustrated and persistency arguments are most likely to weaken.
-6. **Larger proteins**, and a benchmark against `toulbar2` for time-to-optimal.
+7. **Benchmark against `toulbar2`** for time-to-optimal, to place this honestly
+   against the established exact solvers.
 
 ## Licence
 
