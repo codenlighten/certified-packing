@@ -46,6 +46,7 @@ from crown import QUBO, crown_solve, build_certificate, verify
 
 PROTEINS = ["2I9M", "1E0Q", "1L2Y", "1FME", "1VII"]
 NROT = int(os.environ.get("NROT", 4))
+ENERGY = os.environ.get("ENERGY", "steric")
 
 
 def run(Eself, Epair, mode, label, keep=None, origS=None, origP=None):
@@ -81,14 +82,14 @@ def run(Eself, Epair, mode, label, keep=None, origS=None, origP=None):
 
 
 print("=" * 84)
-print(f"ENCODING COMPARISON — does DEE rescue persistency?   (NROT={NROT})")
+print(f"ENCODING COMPARISON — DEE + certification   (NROT={NROT}, ENERGY={ENERGY})")
 print("=" * 84)
 
 rows = []
 for pid in PROTEINS:
     residues = parse_residues(f"data/pdb/{pid}.pdb")
     flex, backbone = build_rotamers(residues, NROT)
-    Eself, Epair = build_instance(flex, backbone)
+    Eself, Epair = build_instance(flex, backbone, ENERGY)
     full_rot = sum(len(e) for e in Eself)
 
     Es, Ep, keep = goldstein_dee(Eself, Epair)

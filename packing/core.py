@@ -7,6 +7,7 @@ over a choice of one rotamer r_i per flexible residue.
 
 import numpy as np
 from collections import defaultdict
+from .forcefield import ENERGIES, steric_count
 
 CONTACT_CUT = 6.0
 CLASH = 3.2
@@ -32,8 +33,10 @@ def parse_residues(path):
         key = (line[17:20].strip(), line[22:27])
         if key not in res:
             order.append(key)
-        res[key][line[12:16].strip()] = np.array(
-            [float(line[30:38]), float(line[38:46]), float(line[46:54])])
+        name = line[12:16].strip()
+        el = line[76:78].strip() or "".join(c for c in name if c.isalpha())[:1]
+        res[key][name] = (np.array([float(line[30:38]), float(line[38:46]),
+                                    float(line[46:54])]), el.upper())
     return [(k[0], k[1], res[k]) for k in order]
 
 
@@ -57,42 +60,47 @@ def _dihedral(p0, p1, p2, p3):
 
 def build_rotamers(residues, nrot):
     """(flex, backbone_atoms). Rotamer 0 is always the native conformation."""
-    flex, fixed = [], []
+    flex, fixed, fixed_el = [], [], []
     for rn, rid, atoms in residues:
         moving = [a for a in atoms if a not in BACKBONE and a != "CB"]
         if rn in NO_CHI1 or "CB" not in atoms or "N" not in atoms or not moving:
-            fixed.append(np.array([atoms[a] for a in atoms]))
+            fixed.append(np.array([atoms[a][0] for a in atoms]))
+            fixed_el.extend(atoms[a][1] for a in atoms)
             continue
-        CA, CB, N = atoms["CA"], atoms["CB"], atoms["N"]
-        chi = _dihedral(N, CA, CB, atoms[sorted(moving)[0]])
-        base = np.array([atoms[a] for a in moving])
+        CA, CB, N = atoms["CA"][0], atoms["CB"][0], atoms["N"][0]
+        chi = _dihedral(N, CA, CB, atoms[sorted(moving)[0]][0])
+        base = np.array([atoms[a][0] for a in moving])
         confs = [base] + [_rot(base, CB, CB - CA, t - chi)
                           for t in CHI1_WELLS[nrot]]
         flex.append({"name": rn, "id": rid.strip(), "confs": confs,
-                     "stem": atoms["CB"]})
-        fixed.append(np.array([atoms[a] for a in atoms
-                               if a in BACKBONE or a == "CB"]))
-    return flex, np.vstack(fixed)
+                     "elems": [atoms[a][1] for a in moving], "stem": CB})
+        keepbb = [a for a in atoms if a in BACKBONE or a == "CB"]
+        fixed.append(np.array([atoms[a][0] for a in keepbb]))
+        fixed_el.extend(atoms[a][1] for a in keepbb)
+    return flex, (np.vstack(fixed), fixed_el)
 
 
 # -------------------------------------------------------------------- energy
-def pair_energy(A, B):
+def pair_energy(A, B):  # legacy shim
     """Bounded steric/contact score. Counting, not squared penetration."""
     d = np.linalg.norm(A[:, None, :] - B[None, :, :], axis=-1)
     return float(5.0 * np.sum(d < CLASH) - 0.1 * np.sum(d < CONTACT_CUT))
 
 
-def build_instance(flex, backbone):
+def build_instance(flex, backbone, energy="steric"):
+    """Build the MRF. `energy` selects a function from forcefield.ENERGIES."""
+    fn = ENERGIES[energy] if isinstance(energy, str) else energy
+    bb_xyz, bb_el = backbone
     n = len(flex)
-    Eself = [np.array([pair_energy(f["confs"][r], backbone)
-                       for r in range(len(f["confs"]))]) for f in flex]
+    Eself = [np.array([fn(c, f["elems"], bb_xyz, bb_el) for c in f["confs"]])
+             for f in flex]
     Epair = {}
     for i in range(n):
         for j in range(i + 1, n):
             if np.linalg.norm(flex[i]["stem"] - flex[j]["stem"]) > 14.0:
                 continue
-            M = np.array([[pair_energy(a, b) for b in flex[j]["confs"]]
-                          for a in flex[i]["confs"]])
+            M = np.array([[fn(a, flex[i]["elems"], b, flex[j]["elems"])
+                           for b in flex[j]["confs"]] for a in flex[i]["confs"]])
             if np.abs(M).max() > 1e-9:
                 Epair[(i, j)] = M
     return Eself, Epair

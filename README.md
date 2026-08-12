@@ -16,7 +16,9 @@ The resulting statement is categorically different from what annealing gives:
 ## The result
 
 The naive reduction fails at useful sizes. Goldstein **Dead-End Elimination**
-fixes it, and the reason is structural rather than incidental.
+fixes it, and the reason is structural rather than incidental. **The finding
+holds under both a coarse counting score and a physics-based
+molecular-mechanics energy** — see [Energy function](#energy-function).
 
 | arm | certified | mean compression | mean vars |
 |---|---|---|---|
@@ -26,13 +28,16 @@ fixes it, and the reason is structural rather than incidental.
 
 Per instance, 4 rotamers per flexible residue:
 
-| protein | residues | rotamers | DEE pruned | A | B | C |
+| protein | residues | rotamers | DEE pruned (steric / MM) | A | B | C |
 |---|---|---|---|---|---|---|
-| 2I9M | 9 | 36 | 69% | ✔ | ✔ | ✔ |
-| 1E0Q | 16 | 64 | 67% | ✔ | ✔ | ✔ |
-| 1L2Y | 13 | 52 | 60% | ✔ | ✔ | ✔ |
-| 1FME | 25 | 100 | 68% | ✘ | ✔ | ✔ |
-| 1VII | 30 | 120 | 68% | ✘ | ✔ | ✔ |
+| 2I9M | 9 | 36 | 69% / 72% | ✔ | ✔ | ✔ |
+| 1E0Q | 16 | 64 | 67% / 47% | ✔ | ✔ | ✔ |
+| 1L2Y | 13 | 52 | 60% / 65% | ✔ | ✔ | ✔ |
+| 1FME | 25 | 100 | 68% / **75%** | ✘ | ✔ | ✔ |
+| 1VII | 30 | 120 | 68% / 72% | ✘ | ✔ | ✔ |
+
+Arm results are identical under both energies: A certifies 3/5, B and C certify
+5/5.
 
 **On 1FME the uncertified baseline was 157.90 worse than the true optimum**
 (678.40 vs 520.50) — and without a certificate there was no way to know. That is
@@ -57,6 +62,38 @@ two survivors, at which point the penalty clique largely disappears.
 
 DEE (Desmet et al. 1992) and roof duality are the same idea at different levels.
 Running the categorical one first is what makes the binary one work.
+
+## Energy function
+
+Two energies are implemented (`packing/forcefield.py`), and the pipeline is run
+against both so the conclusion cannot rest on an artefact of a toy score:
+
+- **`steric`** — the coarse counting score: clashes minus contacts.
+- **`mm`** — softened Lennard-Jones 6-12 with per-element radii and well depths
+  (AMBER-like), a Gaussian hydrogen-bond term between polar atoms, and a
+  burial-based solvation term. The LJ repulsion is linearised below 0.6·r_min,
+  Rosetta-style, so clashes stay finite.
+
+**The result is stable across both.** Under `mm`, DEE prunes 47–75% of rotamers
+and certification still goes 3/5 → 5/5. Two details worth recording:
+
+- **On 1FME, DEE alone solved the instance outright** — every residue reduced to
+  a single surviving rotamer, leaving *zero* variables for the QUBO solver.
+  Categorical persistency was sufficient on its own.
+- **1E0Q is the hard case.** DEE pruned only 47%, leaving arities up to 4, and
+  certification came from exact-core solving rather than roof duality
+  (compression 0.147). It is the instance to watch as the energy gets more
+  realistic.
+
+Uncertified baselines under `mm` came within 10.76 and 4.33 kcal/mol of the
+optimum — small in relative terms against total energies of ~4400, but 10 kcal/mol
+is chemically significant, and without a certificate there is no way to know
+which case you are in.
+
+`mm` is a **simplified** molecular-mechanics energy: no electrostatics, no
+torsional strain, no rotamer priors, and burial-count solvation rather than
+EEF1/GB. It exists to test that the pipeline survives a continuous, physically
+motivated energy with realistic dynamic range — not to predict structures.
 
 ## Correctness
 
@@ -113,13 +150,16 @@ failure to the model.
 
 ## Next
 
-1. **Real energy function** — swap the steric counter for a proper force-field
-   term (Lennard-Jones, hydrogen bonding, solvation) and re-check that DEE still
-   prunes 60%+. Nothing about the method depends on the current energy.
+1. ~~Real energy function~~ — **done.** DEE prunes 47–75% under molecular
+   mechanics and certification is unchanged.
 2. **Real rotamer libraries** — Dunbrack backbone-dependent, χ₁+χ₂, 10–100
-   rotamers per residue. This is the real scaling test.
-3. **Larger proteins**, and a benchmark against `toulbar2` for time-to-optimal.
-4. **Split DEE** and other stronger elimination criteria when Goldstein stalls.
+   rotamers per residue. This is the real scaling test, and 1E0Q's 47% pruning
+   rate is the warning sign to watch.
+3. **Electrostatics and proper solvation** (EEF1 or GB), which is where the
+   energy landscape gets genuinely frustrated.
+4. **Larger proteins**, and a benchmark against `toulbar2` for time-to-optimal.
+5. **Split DEE** and stronger elimination criteria for when Goldstein stalls —
+   directly relevant to 1E0Q.
 
 ## Licence
 
