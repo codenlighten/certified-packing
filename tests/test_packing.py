@@ -87,6 +87,21 @@ for trial in range(10):
           f"opt {before:.4f} -> {after:.4f}",
           abs(before - after) < 1e-8 and ns <= ng)
 
+print("\nPAIR-SPLIT DEE SAFETY: two-witness splitting still preserves the optimum")
+for trial in range(12):
+    n = int(rng.integers(4, 7))
+    arities = [int(rng.integers(2, 5)) for _ in range(n)]
+    Eself, Epair = random_instance(n, arities)
+    before, _ = brute_force(Eself, Epair)
+    _, _, k1 = dee_prune(Eself, Epair, split=True)
+    Es, Ep, keep = dee_prune(Eself, Epair, split=2)
+    after, _ = brute_force(Es, Ep)
+    n1, n2 = sum(len(x) for x in k1), sum(len(x) for x in keep)
+    # split=2 must be at least as strong as split=1 and must not move the optimum
+    check(f"trial {trial} arities={arities} split->{n1} pair-split->{n2} "
+          f"opt {before:.4f} -> {after:.4f}",
+          abs(before - after) < 1e-8 and n2 <= n1)
+
 print("\nDEE + ENCODING: pruned instance still round-trips")
 for trial in range(4):
     n = int(rng.integers(4, 7))

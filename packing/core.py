@@ -201,8 +201,8 @@ def goldstein_dee(Eself, Epair, max_rounds=50):
     return Es, Ep, keep
 
 
-def dee_prune(Eself, Epair, split=True, max_rounds=60):
-    """Goldstein DEE, optionally strengthened with Split DEE (1 witness).
+def dee_prune(Eself, Epair, split=True, max_rounds=60, max_witness_pairs=24):
+    """Goldstein DEE, optionally strengthened with Split DEE.
 
     Goldstein: rotamer r at residue i is dead if some single t dominates r
     against EVERY environment.
@@ -213,7 +213,13 @@ def dee_prune(Eself, Epair, split=True, max_rounds=60):
     is still dead. Strictly stronger, because Goldstein needs one t to work
     everywhere at once.
 
-    Both criteria are provably safe: neither can remove a globally optimal
+    split=2 splits on PAIRS of witnesses (w1, w2) jointly, giving k_w1 * k_w2
+    partitions instead of k_w. Strictly stronger again, and strictly more
+    expensive, so witness pairs are capped at `max_witness_pairs`, chosen by
+    largest coupling range -- the neighbours whose choice moves residue i's
+    energy most are the ones worth partitioning on.
+
+    All three criteria are provably safe: none can remove a globally optimal
     rotamer. Verified against brute force in tests/test_packing.py.
     """
     n = len(Eself)
@@ -255,6 +261,27 @@ def dee_prune(Eself, Epair, split=True, max_rounds=60):
                         + (sub_w[:, None, :] - sub_w[None, :, :])
                     B[np.arange(k), np.arange(k), :] = -np.inf
                     covered = (B > 1e-9).any(axis=1).all(axis=1)
+                    dead |= covered
+
+            if split == 2 and not dead.all():
+                # Rank witnesses by how much their choice can move residue i's
+                # energy; partitioning on a neighbour that barely couples buys
+                # nothing, so only the strongest are paired up.
+                cand = [w for w in subs if len(alive[w]) > 1]
+                cand.sort(key=lambda w: -float(subs[w].max() - subs[w].min()))
+                pairs = [(a, b) for ia, a in enumerate(cand)
+                         for b in cand[ia + 1:]][:max_witness_pairs]
+                for w1, w2 in pairs:
+                    if dead.all():
+                        break
+                    s1, s2 = subs[w1], subs[w2]          # (k, k1), (k, k2)
+                    d1 = s1[:, None, :] - s1[None, :, :]  # (k, k, k1)
+                    d2 = s2[:, None, :] - s2[None, :, :]  # (k, k, k2)
+                    # drop BOTH worst-case terms, add the joint witness terms
+                    B = (base - ms[w1] - ms[w2])[:, :, None, None] \
+                        + d1[:, :, :, None] + d2[:, :, None, :]
+                    B[np.arange(k), np.arange(k), :, :] = -np.inf
+                    covered = (B > 1e-9).any(axis=1).all(axis=(1, 2))
                     dead |= covered
 
             if dead.all():                     # degenerate ties: keep one

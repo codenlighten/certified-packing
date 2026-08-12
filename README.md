@@ -51,8 +51,14 @@ the practical case for certification in one line.
   **nothing** — compression 0.000 in every case. The penalty places a `+2λ`
   coupling between every pair of rotamers within a residue: a dense, strongly
   non-submodular clique, precisely what roof duality cannot handle. Certification
-  falls back to exact core solving, which is exponential in treewidth. It holds
-  to ~90 variables and fails at 100–120.
+  falls back to exact core solving, which is exponential in treewidth.
+
+  On the original five small proteins this looked like a **variable-count**
+  ceiling — it held to ~90 variables and failed at 100–120. The size ladder
+  showed that reading was wrong: see
+  [Larger proteins](#larger-proteins-the-ceiling-is-not-a-size-ceiling).
+  Treewidth is the binding constraint, and variable count was only standing in
+  for it on a sample too small to tell them apart.
 
 **The fix is not a cleverer binary encoding. It is to apply persistency before a
 binary encoding exists.** Goldstein DEE is categorical persistency — it prunes
@@ -142,6 +148,57 @@ residual core means the solver finishes quickly rather than grinding to a
 bracket. Split DEE is verified optimum-preserving against brute force in
 `tests/test_packing.py`.
 
+## Larger proteins: the ceiling is not a size ceiling
+
+Every instance in the sections above certified in under 10 seconds, which means
+the size limit was never actually probed — those proteins were 9–30 flexible
+residues. `experiments/size_scaling.py` runs the identical pipeline over a
+ladder of 14 proteins, **32–369 flexible residues**, at all three χ depths.
+
+**Certification reaches 369 flexible residues** — 12× the largest instance in
+the original set — and 41 of 42 instances were small enough to attempt.
+
+| χ depth | certified | largest certified | failures |
+|---|---|---|---|
+| χ≤1 | **14/14** | 1GAI, 369 residues | — |
+| χ≤2 | **12/14** | 1ADE, 336 residues / 251 vars | 1A6M, 1GAI |
+| χ≤3 | **4/13** | 1AKI, 103 residues | 9 (1 more skipped over the 400-var cap) |
+
+At χ≤1 every instance certifies by roof duality alone (`bound-tight`), in ≤7.5s
+including energy construction, all the way to 369 residues. DEE pruning does not
+decay with size — it holds at 67–73% at χ≤1 and 81–89% at χ≤3 regardless of
+whether the protein has 32 residues or 369.
+
+### The prediction that failed, and what replaced it
+
+The earlier sections recorded a **~90-variable certification ceiling**. The
+ladder falsifies it in both directions:
+
+| instance | residual vars | result |
+|---|---|---|
+| 1ADE χ≤2 | **251** | ✔ certified, exact-core, 57s |
+| 3PGK χ≤2 | 163 | ✔ certified, exact-core, 20s |
+| 8ABP χ≤2 | 150 | ✔ certified, exact-core, 32s |
+| 1QOP χ≤2 | 94 | ✔ certified, **bound-tight, 1.4s** |
+| 1UBQ χ≤3 | **93** | ✘ bracket |
+| 1A6M χ≤2 | 133 | ✘ bracket |
+
+A core of 251 variables certifies while one of 93 does not. Nor is it protein
+size: **1AKI certifies at 103 flexible residues while 1UBQ fails at 65.**
+
+Three candidate explanations were measured and all three fail, because the
+certified and failed ranges overlap:
+
+| quantity | certified | failed | verdict |
+|---|---|---|---|
+| flexible residues | 32–369 | 65–369 | no signal |
+| residual variables | 2–251 | 93–354 | overlaps 93–251 |
+| one-hot (arity ≥ 3) variables | 0–186 | 77–298 | overlaps 77–186 |
+
+The "~90 variables" number was never a property of the method. It was an
+artifact of five small proteins on which variable count happened to correlate
+with the thing that actually binds.
+
 ## Correctness
 
 Every claim above rests on checks that run in CI, because encoding bugs are the
@@ -182,9 +239,12 @@ Further limits, stated plainly:
 
 - The energy function is **crude** — counted steric clashes and contacts on heavy
   atoms, not a force field. **Biological accuracy is not claimed.**
-- **4 rotamers per residue** via χ₁ rotation; real libraries carry 10–100 and
-  include χ₂₊.
-- These are **small proteins** (9–30 flexible residues).
+- Rotamers come from a **staggered multi-χ grid**, not a real library. Mean
+  arity reaches ~24 at χ≤3, but there are no rotamer priors, so a
+  low-probability conformation costs the same as a common one.
+- Proteins run to **369 flexible residues**, but the hardest setting is not
+  solved: at χ≤3 only **4/13** instances certify. Size is not the limit —
+  treewidth of the residual core is.
 - A certificate says "optimal **for this energy function**." Model error is
   untouched — and in protein design model error is usually the binding
   constraint.
@@ -204,14 +264,25 @@ failure to the model.
    now exceed the certification ceiling at ~90–105 residual variables.
 3. ~~Shrink the residual core~~ — **done.** Split DEE takes 13/15 → **15/15**,
    cutting survivors by 28–47% on the hard cases and running faster.
-4. **Larger proteins** — every instance here now certifies in ≤10s, so the size
-   ceiling is untested. This is the next real boundary.
-5. **A real library** (Dunbrack, with rotamer priors) to replace the staggered
+4. ~~Larger proteins~~ — **done, and the premise was wrong.** Certification
+   reaches **369 flexible residues**, 12× the original set, and the "~90
+   variable ceiling" turned out to be an artifact of a small sample: a
+   251-variable core certifies while a 93-variable one does not. There is no
+   size ceiling. See
+   [Larger proteins](#larger-proteins-the-ceiling-is-not-a-size-ceiling).
+5. **Attack treewidth directly** — the real binding constraint. Pair-split DEE
+   (`split=2`) was tried and is an honest negative: it cut 1UBQ χ≤3 from 93 to
+   87 variables and 3CHY from 98 to 96, and neither crossed the line. Pruning
+   *more rotamers* is not the lever; reducing the *interaction graph* is.
+   Candidates: residue-pair clustering, or a tree decomposition that solves
+   high-width regions separately.
+6. **A real library** (Dunbrack, with rotamer priors) to replace the staggered
    grid, which would also let low-probability rotamers be pruned on prior.
-6. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
+7. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
    gets genuinely frustrated and persistency arguments are most likely to weaken.
-7. **Benchmark against `toulbar2`** for time-to-optimal, to place this honestly
-   against the established exact solvers.
+8. **Benchmark against `toulbar2`** for time-to-optimal, to place this honestly
+   against the established exact solvers. Now more pointed than before: at χ≤3
+   `toulbar2` would likely solve the instances this pipeline cannot certify.
 
 ## Licence
 
