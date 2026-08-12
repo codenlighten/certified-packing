@@ -199,6 +199,41 @@ The "~90 variables" number was never a property of the method. It was an
 artifact of five small proteins on which variable count happened to correlate
 with the thing that actually binds.
 
+### What actually binds: core treewidth
+
+CROWN certifies in two stages. Roof duality fixes what it can; whatever survives
+is a **core** that must be solved exactly, and exact solution is exponential in
+the core's induced **treewidth** — not in its variable count. CROWN reports both
+(`core_size`, `core_width`), and `size_scaling.py` now records them.
+
+Treewidth separates where the other three quantities did not (41 attempted
+instances, 30 certified):
+
+| core treewidth | certified | failed |
+|---|---|---|
+| **< 22** | **27** | 0 |
+| 22–27 | 3 | 2 |
+| **> 27** | 0 | **9** |
+
+Outside a six-unit transition band the split is total. Inside it, search
+difficulty rather than width decides — CROWN's core solver is branch-and-bound
+under a budget, not pure elimination, so width bounds the cost without fixing
+it.
+
+The decisive comparison, both instances real:
+
+| instance | vars | core treewidth | result |
+|---|---|---|---|
+| 1ADE χ≤2 | **251** | 25 | ✔ certified, 53s |
+| 1UBQ χ≤3 | **93** | 31 | ✘ bracket |
+
+Nearly three times the variables, certified — because the core is narrower.
+This is why **pruning harder is the wrong lever**: pair-split DEE (`split=2`)
+removes more rotamers but leaves the interaction graph the same shape, and on
+the two instances it was built for it moved 1UBQ from 93 to 87 variables and
+3CHY from 98 to 96 without either crossing the line. What has to shrink is
+width.
+
 ## Correctness
 
 Every claim above rests on checks that run in CI, because encoding bugs are the
