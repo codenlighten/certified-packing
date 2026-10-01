@@ -3,10 +3,20 @@
 Protein side-chain packing with a **machine-checkable proof of optimality**.
 
 Side-chain packing — choose one rotamer per residue on a fixed backbone to
-minimise a pairwise energy — is a discrete pairwise MRF. This repository poses it
-as a QUBO, solves it with [CROWN](https://github.com/codenlighten/crown), and
-emits a certificate a third party can verify **by bounded arithmetic, without
-rerunning the solver**.
+minimise a pairwise energy — is a discrete pairwise MRF. This repository
+certifies its global optimum with a certificate a third party can verify **in
+exact rational arithmetic, without rerunning any solver**.
+
+There are two certificate routes, and the second supersedes the first:
+- **The QUBO route.** Pose the MRF as a QUBO and solve it with
+  [CROWN](https://github.com/codenlighten/crown). It certified 30 of 42
+  benchmark instances, to a floating-point tolerance, and fails when the
+  residual core's treewidth exceeds ~27.
+- **The LP-dual route.** The local-polytope LP plus triplet clusters, solved
+  exactly by SoPlex and checked with Python `Fraction`s. It certifies **all
+  42** exactly (gap 0) on the DEE-reduced instances, and **38 of them** on the
+  unpruned instances, with no DEE in the chain. See
+  [Exact certificates for all 42](#exact-certificates-for-all-42-the-relaxation-not-the-core).
 
 The resulting statement is categorically different from what annealing gives:
 
@@ -15,8 +25,9 @@ The resulting statement is categorically different from what annealing gives:
 
 **Read this before the tables below.** The claim is about the *artifact*, not
 about speed or scale. Benchmarked head-to-head, `toulbar2` solves every instance
-here in under a second and solves twelve that this pipeline cannot certify at
-all. If you want an optimal packing, use `toulbar2`. What this repository offers
+here in under a second, including the twelve the CROWN route could not certify.
+The exact LP certificates take seconds to minutes each. If you want an optimal
+packing, use `toulbar2`. What this repository offers
 is a certificate you can re-check without trusting the solver — see
 [Measured against `toulbar2`](#measured-against-toulbar2).
 
@@ -295,6 +306,188 @@ difference, not a performance one. A benchmark table cannot express it, which is
 why the table above should be read as bounding the claim rather than supporting
 it.
 
+## Exact certificates for all 42: the relaxation, not the core
+
+The treewidth section above says exact core solving is the wall. The way round it
+is not a narrower core. It is to stop solving the core at all, and certify with
+a **relaxation bound** instead: if a lower bound LB on every assignment's energy
+meets the energy of a known assignment, that assignment is optimal, whatever the
+treewidth.
+
+The relaxation is the **local marginal polytope LP** of the categorical MRF:
+one rotamer per residue as a hard constraint, not the one-hot penalty that
+defeats roof duality. Its dual is a **reparameterisation**, a set of messages
+that move energy between each pair table and its endpoints without changing any
+assignment's total. For *any* messages, the sum of the reparameterised tables'
+minima is a lower bound. So the certificate is an assignment plus the messages.
+The **verifier** needs no solver: whatever produced the messages (SoPlex,
+HiGHS, a bug) is untrusted input to it. A bad message can only weaken the bound,
+never make it wrong.
+
+| rung | what | result on the 42 |
+|---|---|---|
+| (a) | local-polytope LP | tight on **36/42** (to floating-point noise). The other 6 have real gaps of 0.001–0.97 kcal/mol |
+| (b) | + triplet clusters (Sontag et al. 2008) on triangles touching fractional residues | closes **all 6** in one round, 24–196 triplets |
+| (c) | + semidefinite constraints | **not needed** |
+
+The six instances that needed triplets are 8ABP χ≤2, 1ADE χ≤2, 1GAI χ≤3,
+1QOP χ≤3, 2LZM χ≤3 and 3PGK χ≤3.
+
+### From "tight to 1e-12" to exact
+
+A floating-point LP that is "tight to 1e-12" is not a proof. Three steps make it
+one:
+
+1. **Exact dual.** Each LP is written with exact rational coefficients (every
+   stored double is a dyadic rational, written as `p/q`) and solved by
+   [SoPlex](https://soplex.zib.de) 8.1.0 in exact rational mode (iterative
+   refinement, Gleixner, Steffy & Wolter), which returns a rational dual.
+   Nothing downstream trusts that dual; it only has to pass step 2.
+2. **Exact check.** `packing/certify.py` re-derives LB from the messages with
+   Python `Fraction`s only. It needs no LP solver, no floating point and no
+   tolerance. It enumerates every entry of every table and calls the assignment
+   optimal only if **LB ≥ E(x\*) exactly**. The assignment is SoPlex's exact
+   primal solution, which was integral on all 42 instances and agreed with
+   `toulbar2`'s on all 42. Its energy is recomputed exactly by the checker in
+   any case.
+3. **No DEE in the chain.** A certificate on the Split-DEE-reduced instance
+   still trusts DEE, a floating-point procedure. `experiments/lift_certificate.py`
+   lifts each reduced certificate to the **unpruned** instance:
+   - Messages on kept rotamers are copied. For a pair (i, j) with reparameterised
+     table P and minimum m, pruned rotamers get, in exact arithmetic:
+     `d_j(b) = min over kept a of [P(a,b) − d_i(a)] − m`, then
+     `d_i(a) = min over all b of [P(a,b) − d_j(b)] − m`.
+     No entry of the pair term then falls below m. Triplet-message entries that
+     touch a pruned rotamer are set low enough that no triplet minimum moves.
+   - The few pruned rotamers that still fall short go back into a working set,
+     the (still small) LP is re-solved exactly, and the lift repeats. This is
+     row-and-column generation, with DEE's kept set only as the starting point.
+   - The result is checked on the unpruned instance. **That passing check is
+     the proof.** Neither the lifting rule nor DEE has to be correct for the
+     claim to hold; a wrong lift would simply fail the check.
+
+   Solving the unpruned LP exactly and directly works too: 1ADE χ≤1 and
+   3PGK χ≤1 were done both ways, and both ways prove the same optimum. But it
+   took 234–321 s at 40k columns, and the χ≤3 LPs have up to 820k.
+
+   Three things made the lift fast enough, and each is only a search aid: none
+   is trusted, because the final check is exact.
+   - **Float pre-pass.** The working set is first grown with cheap HiGHS duals,
+     so usually one exact solve suffices.
+   - **Warm start.** SoPlex starts from HiGHS's optimal basis. On 2LZM χ≤3
+     that took the exact solve from a 2-hour timeout to ~80 s.
+   - **GMP rationals** (`gmpy2`) in the lift. Exact duals from a warm-started
+     basis can be enormous: dual files of 70–310 MB.
+
+**Result, each from running the checker on the published instance and
+certificate: 42/42 exact on the reduced instances, 38/42 on the unpruned
+instances, with gap exactly 0 in every case.** The four not yet lifted are
+2LZM χ≤3, 1QOP χ≤3, 1GAI χ≤3 and 3PGK χ≤3, the instances with the most
+triplets. Their exact certificates are on the reduced instance, so DEE is still
+in their chain. The run data is in
+`experiments/lp_bound.*.jsonl`, `tighten.jsonl`, `exact_certificate.R.jsonl` and
+`lift_certificate.*.jsonl`. The reduced certificates
+include all twelve instances CROWN could not certify: 1UBQ χ≤3, the treewidth-31 case above, and
+1GAI χ≤3, where CROWN's best answer was 867.8 kcal/mol too high.
+
+| instance | rotamers | LP gap (a) | triplets | exact, reduced | exact, unpruned (lifted) | exact rounds | final set |
+|---|---|---|---|---|---|---|---|
+| 1CRN χ≤1 | 104 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 2 | 35 / 104 |
+| 1SHG χ≤1 | 194 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 57 / 194 |
+| 1UBQ χ≤1 | 251 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 97 / 251 |
+| 1QYS χ≤1 | 269 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 104 / 269 |
+| 3CHY χ≤1 | 384 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 110 / 384 |
+| 1AKI χ≤1 | 358 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 127 / 358 |
+| 1A6M χ≤1 | 462 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 152 / 462 |
+| 2LZM χ≤1 | 516 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 171 / 516 |
+| 8ABP χ≤1 | 867 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 5 | 303 / 867 |
+| 1ADE χ≤1 | 1284 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 5 | 441 / 1284 |
+| 1GAI χ≤1 | 1257 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 439 / 1257 |
+| 1QOP χ≤1 | 703 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 232 / 703 |
+| 3PGK χ≤1 | 1188 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 1 | 404 / 1188 |
+| 4AKE χ≤1 | 642 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 219 / 642 |
+| 1CRN χ≤2 | 182 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 2 | 44 / 182 |
+| 1SHG χ≤2 | 494 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 91 / 494 |
+| 1UBQ χ≤2 | 614 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 161 / 614 |
+| 1QYS χ≤2 | 578 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 133 / 578 |
+| 3CHY χ≤2 | 975 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 207 / 975 |
+| 1AKI χ≤2 | 850 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 201 / 850 |
+| 1A6M χ≤2 | 1197 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 287 / 1197 |
+| 2LZM χ≤2 | 1278 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 5 | 309 / 1278 |
+| 8ABP χ≤2 | 2094 | **0.192** | 108 | ✔ gap 0 | ✔ gap 0 | 1 | 698 / 2094 |
+| 1ADE χ≤2 | 3054 | **0.336** | 55 | ✔ gap 0 | ✔ gap 0 | 5 | 816 / 3054 |
+| 1GAI χ≤2 | 2787 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 677 / 2787 |
+| 1QOP χ≤2 | 1711 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 5 | 378 / 1711 |
+| 3PGK χ≤2 | 2862 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 1 | 678 / 2862 |
+| 4AKE χ≤2 | 1569 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 6 | 418 / 1569 |
+| 1CRN χ≤3 | 254 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 46 / 254 |
+| 1SHG χ≤3 | 872 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 122 / 872 |
+| 1UBQ χ≤3 | 1127 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 165 / 1127 |
+| 1QYS χ≤3 | 920 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 175 / 920 |
+| 3CHY χ≤3 | 1614 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 239 / 1614 |
+| 1AKI χ≤3 | 1399 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 3 | 236 / 1399 |
+| 1A6M χ≤3 | 2142 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 4 | 504 / 2142 |
+| 2LZM χ≤3 | 2214 | **0.22** | 25 | ✔ gap 0 | not run | – | – |
+| 8ABP χ≤3 | 3651 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 1 | 726 / 3651 |
+| 1ADE χ≤3 | 5106 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 6 | 988 / 5106 |
+| 1GAI χ≤3 | 4002 | **0.00117** | 196 | ✔ gap 0 | not run | – | – |
+| 1QOP χ≤3 | 2800 | **0.967** | 24 | ✔ gap 0 | not run | – | – |
+| 3PGK χ≤3 | 4986 | **0.152** | 63 | ✔ gap 0 | not run | – | – |
+| 4AKE χ≤3 | 2874 | ≤1e-11 | 0 | ✔ gap 0 | ✔ gap 0 | 5 | 594 / 2874 |
+
+"exact rounds" counts exact SoPlex solves in the lift; "final set" is the
+working set against all rotamers. Instances lifted before the floating-point
+pre-pass existed needed more exact rounds.
+
+**What the certificate is about, precisely.** It is about the energy arrays
+**as loaded by the verifier** from the published instance files
+(`packing/instance_io.py`: one `.npz` per instance with the exact float64
+tables, SHA-256 in `experiments/ARTIFACTS.sha256`). The certificate binds to
+them by a hash over their exact bytes. PDB parsing, rotamer building and the
+force-field code are upstream of that and not certified. The instances are
+published as files, rather than recomputed, because the energy function is
+**not bit-reproducible across machines**. The
+same PDB file gave different last bits on a second machine, and so a different
+instance hash. A certificate says nothing about any other precision, force field
+or machine, and nothing about whether the energy function is any good.
+
+### What this changed about the earlier claims
+
+- **CROWN's own verifier is tolerance-based.** `crown/verify.py` treats
+  `|E − LB| ≤ max(1e-5, 1e-5·|E|)` as optimal. At these energies (1e4–8e4
+  kcal/mol) that is 0.1–0.8 kcal/mol. So the 30 earlier "certified" optima were
+  certified only to that tolerance, not exactly. Their exact agreement with
+  `toulbar2` was the real evidence that they were right, and the exact
+  certificates now confirm all 30.
+- **Speed is still `toulbar2`'s.** Exact certification here costs seconds to
+  minutes per instance: SoPlex ≤345 s on the reduced LPs, a median of 2.4 s.
+  `toulbar2` stays under a second. The claim remains the artifact.
+
+### Four things that went wrong on the way
+
+These are kept on purpose; each would have produced a wrong or unverifiable
+certificate.
+
+- **SoPlex without GMP is not exact.** Built against Boost's rationals only, its
+  "exact" mode prints `Cannot set optimality tolerance to small value 0 without
+  GMP - using 1e-10` and still reports `optimal`. Its duals then missed the
+  exact LP optimum by ~1e-14 in 11 of 12 random tests.
+  - `tests/test_certify.py` demands strong duality in exact arithmetic
+    (certificate LB == exact primal LP value), which caught this.
+  - `scripts/build_soplex.sh` refuses to build without GMP, and the driver
+    treats any SoPlex warning as fatal.
+- **SoPlex's MPS reader caps lines at 256 characters.** The force field
+  produces energies as small as 2.6e-268, whose exact rationals run to ~300
+  digits, so the LPs are written in LP format (8190-character lines) instead.
+- **The first checker was forgeable.** Two spellings of one pair key (`"0,1"` and
+  `"00,1"`) inside a triplet message were added to the pair twice but subtracted
+  once, so a crafted certificate could "prove" a non-optimal assignment. An
+  adversarial review found it. Keys must now be canonical, shapes exact and
+  duplicates are rejected, and the forgery is a regression test.
+- **The instances are not reproducible across machines** (above). The
+  certified objects are therefore the published instance files, not a
+  recomputation.
+
 ## Correctness
 
 Every claim above rests on checks that run in CI, because encoding bugs are the
@@ -310,10 +503,19 @@ failure mode in this area:
   instance, asserting equality. This is what makes "a certificate on the pruned
   problem is a certificate on the original" a verified statement rather than an
   asserted one.
-- **Agreement with an independent exact solver**: all 30 certified optima equal
-  `toulbar2`'s, to floating-point equality, on the same 42-instance set. The
-  checks above are internal; this one is not, and it is the strongest evidence
-  that the certificates are actually right.
+- **Agreement with an independent exact solver**: all 30 CROWN-certified optima
+  equal `toulbar2`'s, to floating-point equality, on the same 42-instance set.
+- **Certificate checker** (`tests/test_certify.py`):
+  - Soundness against brute force: LB ≤ the true minimum for *random* messages,
+    not just good ones.
+  - A suboptimal assignment is never certified.
+  - Tampering is rejected: a one-ulp energy change, out-of-range or non-integer
+    assignments, truncated messages, messages on absent pairs, and the
+    duplicate-key forgery.
+  - With SoPlex, exact strong duality: LB equals the exact primal LP value, and
+    the gap is exactly 0 when the LP is integral.
+- **Every stored certificate re-verifies from the published files alone**
+  (`experiments/verify_certificate.py`), in exact arithmetic, with no solver.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -322,6 +524,22 @@ bash scripts/fetch_data.sh
 NROT=4 .venv/bin/python experiments/encoding_comparison.py
 .venv/bin/python experiments/size_scaling.py         # the size / treewidth ladder
 .venv/bin/python experiments/toulbar2_benchmark.py   # needs pytoulbar2
+
+# exact certificates
+bash scripts/build_soplex.sh                          # SoPlex 8.1.0 + GMP, into third_party/
+.venv/bin/python tests/test_certify.py
+.venv/bin/python experiments/lp_bound.py              # rungs (a) and (b), floating point
+SCOPE=red .venv/bin/python experiments/exact_certificate.py
+.venv/bin/python experiments/lift_certificate.py      # reduced -> unpruned
+.venv/bin/python experiments/export_instances.py      # exact instance files + hash check
+```
+
+To re-check the published certificates, you need neither SoPlex nor any other
+solver:
+
+```bash
+bash scripts/fetch_artifacts.sh certs-2026-09-30     # certificates + exact instances, sha256-checked
+.venv/bin/python experiments/verify_certificate.py
 ```
 
 ## Honest scope
@@ -330,15 +548,16 @@ NROT=4 .venv/bin/python experiments/encoding_comparison.py
 and weighted-CSP solvers such as `toulbar2` have solved these instances exactly
 for years, and on much larger proteins than these. Nothing here beats them on
 speed or size — and that is now **measured, not assumed**: `toulbar2` solves all
-42 benchmark instances in under a second each, while this pipeline certifies 30
-of them and is a median 11× slower where it succeeds. See
+42 benchmark instances in under a second each. The CROWN pipeline certified 30
+of them and was a median 11× slower. The exact LP certificates now cover all 42,
+but they take seconds to minutes each. See
 [Measured against `toulbar2`](#measured-against-toulbar2).
 
 What is different is the **artifact**: an independently verifiable certificate.
 A third party — a reviewer, a collaborator, a contract counterparty — can check
 optimality from the certificate alone, by bounded arithmetic, without trusting or
-rerunning the solver. That is CROWN's contribution, and this repository shows it
-carries over to a real structural-biology problem.
+rerunning the solver. With the LP-dual certificates, that check is exact
+rational arithmetic over published instance files: no solver, no tolerance.
 
 Further limits, stated plainly:
 
@@ -347,9 +566,13 @@ Further limits, stated plainly:
 - Rotamers come from a **staggered multi-χ grid**, not a real library. Mean
   arity reaches ~24 at χ≤3, but there are no rotamer priors, so a
   low-probability conformation costs the same as a common one.
-- Proteins run to **369 flexible residues**, but the hardest setting is not
-  solved: at χ≤3 only **4/13** instances certify. Size is not the limit —
-  treewidth of the residual core is.
+- Proteins run to **369 flexible residues**, and all 42 instances now certify
+  exactly (38 without DEE in the chain). But that rests on the LP relaxation (plus triplets) being tight on
+  these instances, which is an observation, not a theorem. A more frustrated
+  energy (item 7 below) could open real gaps that triplets do not close.
+- A certificate is about the **stored doubles** in the published instance
+  files. The energy function is not bit-reproducible across machines, so a
+  recomputed instance may not be the certified one.
 - A certificate says "optimal **for this energy function**." Model error is
   untouched — and in protein design model error is usually the binding
   constraint.
@@ -375,12 +598,13 @@ failure to the model.
    251-variable core certifies while a 93-variable one does not. There is no
    size ceiling. See
    [Larger proteins](#larger-proteins-the-ceiling-is-not-a-size-ceiling).
-5. **Attack treewidth directly** — the real binding constraint. Pair-split DEE
-   (`split=2`) was tried and is an honest negative: it cut 1UBQ χ≤3 from 93 to
-   87 variables and 3CHY from 98 to 96, and neither crossed the line. Pruning
-   *more rotamers* is not the lever; reducing the *interaction graph* is.
-   Candidates: residue-pair clustering, or a tree decomposition that solves
-   high-width regions separately.
+5. ~~Attack treewidth directly~~ — **done, by not attacking it.** Pair-split
+   DEE (`split=2`) was an honest negative: 1UBQ χ≤3 went from 93 to 87
+   variables and 3CHY from 98 to 96, and neither crossed the line. What worked
+   was replacing exact core solving with an exact **LP-dual certificate**: the
+   local-polytope LP plus triplet clusters is tight on all 42 instances, and
+   SoPlex plus a `Fraction` checker makes that exact. Treewidth no longer
+   matters. See [Exact certificates for all 42](#exact-certificates-for-all-42-the-relaxation-not-the-core).
 6. **A real library** (Dunbrack, with rotamer priors) to replace the staggered
    grid, which would also let low-probability rotamers be pruned on prior.
 7. **Electrostatics and proper solvation** (EEF1 or GB) — where the landscape
@@ -391,6 +615,17 @@ failure to the model.
    was correct. The benchmark did, however, confirm all 30 certified optima
    independently. See
    [Measured against `toulbar2`](#measured-against-toulbar2).
+
+9. **Harder instances for the relaxation.** All 42 are LP-tight after at most
+   one round of triplets. Frustrated energies (electrostatics, item 7) or
+   design problems with more rotamers per residue are where larger cycles or
+   the SDP rung would first be needed. Finding where the LP stops being tight
+   is the next honest test of this certificate.
+10. **Lift the last four.** 2LZM χ≤3, 1QOP χ≤3, 1GAI χ≤3 and 3PGK χ≤3 still
+    trust DEE. Their triplet clusters cover the whole working set at three
+    residues, so each table grows as the cube of the rotamers added, and the
+    LP slows every round. Restricting triplets to the rotamers that matter, or
+    lifting triplet messages the way pair messages are lifted, should fix it.
 
 ## Licence
 

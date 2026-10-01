@@ -3,3 +3,8 @@ scipy>=1.11
 crown @ git+https://github.com/codenlighten/crown.git
 # Only for experiments/toulbar2_benchmark.py; nothing else imports it.
 pytoulbar2>=1.3
+# Exact certificates (experiments/exact_certificate.py, lift_certificate.py).
+# The checker itself (packing/certify.py) needs neither; gmpy2 only speeds it up
+# when CERTIFY_ARITH=gmpy2. SoPlex is built by scripts/build_soplex.sh.
+highspy>=1.11
+gmpy2>=2.2
